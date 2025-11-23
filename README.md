@@ -17,6 +17,3 @@ How to use:
 2. If this is a project site (not `owner.github.io`), the workflow will set the base automatically to `/<repo-name>/`. If you prefer to set a custom base, edit `.github/workflows/deploy.yml` and set the `BASE_URL` environment value.
 3. In your repository settings on GitHub: go to **Settings → Pages** and set the source to the `gh-pages` branch (root). The site will then be available at `https://<owner>.github.io/<repo>/` (unless using a user site).
 
-Notes:
-
-- `vite` needs the correct `base` setting so assets are loaded when the site is served from a sub-path. The project `vite.config.ts` was updated to use `process.env.BASE_URL || '/'`.
