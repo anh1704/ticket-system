@@ -59,6 +59,8 @@ function App() {
   const fetchData = async () => {
     setLoading(true);
     setError(null);
+    // clear top-right notifications for a fresh fetch
+    setSubmitError(null);
     try {
       const response = await fetch(API_URL);
       if (!response.ok)
@@ -69,7 +71,10 @@ function App() {
       const itemsArray = Array.isArray(data) ? data : data.items || [];
       setRawItems(itemsArray);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to fetch data");
+      const msg = err instanceof Error ? err.message : "Failed to fetch data";
+      setError(msg);
+      // also show the error as a top-right notification card
+      setSubmitError(msg);
     } finally {
       setLoading(false);
     }
@@ -136,6 +141,11 @@ function App() {
     paymentMethod: "cash",
   });
 
+  // Submit state
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
   // Khi bấm "Đặt vé ngay" ở ngoài trang chủ
   const openBookingModal = (event: GroupedEvent) => {
     setSelectedEvent(event);
@@ -174,7 +184,6 @@ function App() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentZone) return;
-
     const payload = {
       customerName: booking.customerName,
       email: booking.email,
@@ -187,8 +196,9 @@ function App() {
       item_id: currentZone.item_id, // Gửi đúng ID của hạng vé đang chọn
     };
 
+    setIsSubmitting(true);
+    setSubmitError(null);
     try {
-      // Hiệu ứng loading nút bấm (optional)
       const res = await fetch(API_BOOKING, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -199,19 +209,56 @@ function App() {
 
       const data = await res.json();
       console.log("Success:", data);
-      alert(
-        `✅ Đặt vé thành công!\nVé "${currentZone.name}" đã được gửi tới email của bạn.`
+      // show in-page success message instead of alert
+      setSubmitSuccess(
+        `Vé "${currentZone.name}" đã được gửi tới email của bạn.`
       );
       closeModal();
       fetchData(); // Load lại dữ liệu mới
     } catch (err) {
       console.error(err);
-      alert("❌ Có lỗi xảy ra, vui lòng thử lại.");
+      setSubmitError("Có lỗi xảy ra, vui lòng thử lại.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
+  // auto-dismiss success message after a few seconds
+  useEffect(() => {
+    if (!submitSuccess) return;
+    const t = setTimeout(() => setSubmitSuccess(null), 4500);
+    return () => clearTimeout(t);
+  }, [submitSuccess]);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-sky-50 to-cyan-50">
+      {/* Submit success / error notification cards */}
+      {submitSuccess && (
+        <div className="fixed top-6 right-6 z-50 w-[320px]">
+          <div className="bg-green-50 border-l-4 border-green-500 text-green-700 px-6 py-4 rounded-lg shadow-md">
+            <div className="flex items-start gap-3">
+              <Check className="w-5 h-5 flex-shrink-0 text-green-600" />
+              <div>
+                <div className="font-semibold">Đặt vé thành công</div>
+                <div className="text-sm mt-1">{submitSuccess}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {submitError && (
+        <div className="fixed top-6 right-6 z-50 w-[320px]">
+          <div className="bg-red-50 border-l-4 border-red-500 text-red-700 px-6 py-4 rounded-lg shadow-md">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 text-red-600" />
+              <div>
+                <div className="font-semibold">Lỗi</div>
+                <div className="text-sm mt-1">{submitError}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Header Banner */}
       <div className="container mx-auto px-4 py-8 max-w-7xl">
         <div className="container mx-auto px-4 max-w-5xl">
@@ -537,9 +584,18 @@ function App() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-3 bg-[#2563eb] hover:bg-[#1d4ed8] text-white rounded-lg font-bold shadow-md transition transform duration-150 ease-in-out active:scale-95 active:translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-blue-300 disabled:opacity-60 disabled:cursor-not-allowed"
+                  disabled={isSubmitting}
+                  aria-busy={isSubmitting}
+                  className="flex-1 py-3 bg-[#2563eb] hover:bg-[#1d4ed8] text-white rounded-lg font-bold shadow-md transition transform duration-150 ease-in-out active:scale-95 active:translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-blue-300 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  Xác nhận đặt véeeee
+                  {isSubmitting ? (
+                    <>
+                      <span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                      <span>Đang xử lí</span>
+                    </>
+                  ) : (
+                    <span>Xác nhận đặt vé</span>
+                  )}
                 </button>
               </div>
             </form>
