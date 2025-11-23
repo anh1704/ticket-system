@@ -537,9 +537,9 @@ function App() {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-3 bg-[#2563eb] hover:bg-[#1d4ed8] text-white rounded-lg font-bold shadow-md transition-colors"
+                  className="flex-1 py-3 bg-[#2563eb] hover:bg-[#1d4ed8] text-white rounded-lg font-bold shadow-md transition transform duration-150 ease-in-out active:scale-95 active:translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-blue-300 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  Xác nhận đặt vé
+                  Xác nhận đặt véeeee
                 </button>
               </div>
             </form>

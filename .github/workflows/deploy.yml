@@ -1,5 +1,10 @@
 name: CI & Deploy to GitHub Pages
 
+# Cấp quyền cho bot (Quan trọng)
+permissions:
+  contents: write
+  pages: write
+
 on:
   push:
     branches: [main, master]
@@ -33,7 +38,7 @@ jobs:
         run: npm ci
 
       - name: Determine BASE_URL for GitHub Pages
-        # sets BASE_URL in $GITHUB_ENV: '/' for user/org site, '/repo-name/' for project site
+        # Logic: Nếu tên repo là username.github.io thì base là /, ngược lại là /repo-name/
         run: |
           REPO_NAME=$(basename "$GITHUB_REPOSITORY")
           OWNER="$GITHUB_REPOSITORY_OWNER"
@@ -47,6 +52,7 @@ jobs:
         run: npm run typecheck
 
       - name: Build
+        # Truyền biến môi trường BASE_URL vào quá trình build
         env:
           BASE_URL: ${{ env.BASE_URL }}
         run: npm run build
@@ -61,7 +67,8 @@ jobs:
     name: Deploy to GitHub Pages
     needs: ci
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Chỉ chạy deploy khi push vào nhánh main hoặc master
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -77,6 +84,7 @@ jobs:
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
+          # Chỉ dùng GITHUB_TOKEN mặc định, không dùng Personal Token để tránh xung đột
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./dist
           publish_branch: gh-pages
