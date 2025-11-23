@@ -20,4 +20,3 @@ How to use:
 Notes:
 
 - `vite` needs the correct `base` setting so assets are loaded when the site is served from a sub-path. The project `vite.config.ts` was updated to use `process.env.BASE_URL || '/'`.
-- The workflow uses the built-in `GITHUB_TOKEN` so you don't need to add extra secrets.
