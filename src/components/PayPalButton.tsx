@@ -18,7 +18,7 @@ export default function PayPalPayment({ amount, onSuccess, onError }: PayPalProp
     }}>
       <PayPalButtons
         style={{ layout: "horizontal" }}
-        createOrder={(data, actions) => {
+        createOrder={(_, actions) => {
           return actions.order.create({
             intent: "CAPTURE", // Sửa lỗi type ở đây
             purchase_units: [
@@ -31,7 +31,7 @@ export default function PayPalPayment({ amount, onSuccess, onError }: PayPalProp
             ],
           });
         }}
-        onApprove={(data, actions) => {
+        onApprove={(_, actions) => {
           if (!actions.order) return Promise.reject("Order not found");
           return actions.order.capture().then((details) => {
             onSuccess(details);

@@ -48,7 +48,7 @@ function App() {
   // --- STATE ---
   const [rawItems, setRawItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [_error, setError] = useState<string | null>(null);
   const [ticketQR, setTicketQR] = useState<string | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
 
