@@ -28,7 +28,6 @@ interface Item {
   product_type: string;
   created_time: string;
   last_modified_time: string;
-  // Các trường tùy chỉnh từ Zoho (n8n đã làm phẳng)
   cf_date_and_time?: string;
   cf_location?: string;
 }
@@ -81,18 +80,16 @@ function App() {
     fetchData();
   }, []);
 
-  // --- 3. LOGIC GOM NHÓM SKU (Quan trọng) ---
   const events = useMemo(() => {
     const groups: Record<string, GroupedEvent> = {};
 
     rawItems.forEach((item) => {
-      // Logic tách SKU: HAT2025-VIP -> Lấy HAT2025
       const skuPrefix = item.sku ? item.sku.split("-")[0] : `UNKNOWN_${item.item_id}`;
 
       if (!groups[skuPrefix]) {
         groups[skuPrefix] = {
           code: skuPrefix,
-          name: item.name.split("-")[0].trim(), // Lấy tên gốc
+          name: item.name.split("-")[0].trim(), 
           minPrice: item.rate,
           totalStock: 0,
           available: 0,
@@ -217,12 +214,15 @@ function App() {
         `Vé "${currentZone.name}" đã được gửi tới email: ${booking.email}`
       );
 
-      if (data.ticket_qr) {
+      if (booking.paymentMethod === 'paypal' && data.ticket_qr) {
+          // TRƯỜNG HỢP 1: PAYPAL -> Hiện Modal QR to đùng
           setTicketQR(data.ticket_qr);
-          setShowSuccessModal(true); // Mở modal chúc mừng
+          setShowSuccessModal(true); 
       } else {
-          // Fallback nếu không có QR (ví dụ n8n chưa cấu hình xong)
-          setSubmitSuccess(`Vé đã được gửi tới email: ${booking.email}`);
+          // TRƯỜNG HỢP 2: TIỀN MẶT -> Chỉ hiện thông báo xanh góc trên phải
+          setSubmitSuccess(
+            `Đặt vé thành công! Mã đơn: ${data.invoice_number || 'Mới'}. Vui lòng thanh toán tại quầy.`
+          );
       }
 
       closeModal();
