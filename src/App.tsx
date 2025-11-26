@@ -1,5 +1,4 @@
 import { useEffect, useState, useMemo } from "react";
-import PayPalPayment from "./components/PayPalButton"; 
 import {
   Package,
   ShoppingCart,
@@ -11,7 +10,7 @@ import {
   Ticket,
 } from "lucide-react";
 
-// --- 1. ĐỊNH NGHĨA INTERFACE (Cấu trúc dữ liệu) ---
+// --- 1. ĐỊNH NGHĨA INTERFACE ---
 interface Item {
   item_id: string;
   name: string;
@@ -28,41 +27,41 @@ interface Item {
   product_type: string;
   created_time: string;
   last_modified_time: string;
-  cf_date_and_time?: string;
+  cf_time_unformatted?: string;
   cf_location?: string;
 }
 
-// Interface cho Sự kiện (Show) sau khi đã gom nhóm
 interface GroupedEvent {
-  code: string;       // Mã Show (ví dụ: HAT2025)
-  name: string;       // Tên Show
-  minPrice: number;   // Giá thấp nhất
-  totalStock: number; // Tổng vé
-  available: number;  // Có sẵn
-  actual: number;     // Thực tế
-  zones: Item[];      // Danh sách các hạng vé con
+  code: string;
+  name: string;
+  minPrice: number;
+  totalStock: number;
+  available: number;
+  actual: number;
+  zones: Item[];
 }
+
+// --- TỶ GIÁ QUY ĐỔI (USD -> VND) ---
+const EXCHANGE_RATE = 26000; 
 
 function App() {
   // --- STATE ---
   const [rawItems, setRawItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false);
-  const [_error, setError] = useState<string | null>(null);
-  const [ticketQR, setTicketQR] = useState<string | null>(null);
-  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // API Lấy danh sách (GET)
-  const API_URL = "https://n8n-group5.len-handmade.top/webhook/5ce3f9d5-87e4-4555-a5ad-127136953a14";
-  // API Đặt vé (POST)
-  const API_BOOKING = "https://n8n-group5.len-handmade.top/webhook/abdd44ea-1757-43f2-9007-019c047e79af";
+  // --- CẤU HÌNH API ---
+  const API_GET_URL = "https://n8n-group5.len-handmade.top/webhook/1cb7e2e7-bdb0-406e-82b6-799ffbd85625";
+  const API_BOOKING_CASH = "https://n8n-group5.len-handmade.top/webhook/1cb7e2e7-bdb0-406e-82b6-799ffbd85625"; 
+  const API_BOOKING_PAYPAL = "https://n8n-group5.len-handmade.top/webhook/abdd44ea-1757-43f2-9007-019c047e79af";
 
-  // --- 2. FETCH DATA ---
+  // --- FETCH DATA ---
   const fetchData = async () => {
     setLoading(true);
     setError(null);
-    setSubmitError(null); // Reset lỗi submit cũ nếu có
+    setSubmitError(null);
     try {
-      const response = await fetch(API_URL);
+      const response = await fetch(API_GET_URL);
       if (!response.ok) throw new Error(`Lỗi HTTP: ${response.status}`);
 
       const data = await response.json();
@@ -80,16 +79,17 @@ function App() {
     fetchData();
   }, []);
 
+  // --- LOGIC GOM NHÓM SKU ---
   const events = useMemo(() => {
     const groups: Record<string, GroupedEvent> = {};
 
     rawItems.forEach((item) => {
-      const skuPrefix = item.sku ? item.sku.split("-")[0] : `UNKNOWN_${item.item_id}`;
+      const groupKey = item.name.trim();
 
-      if (!groups[skuPrefix]) {
-        groups[skuPrefix] = {
-          code: skuPrefix,
-          name: item.name.split("-")[0].trim(), 
+      if (!groups[groupKey]) {
+        groups[groupKey] = {
+          code: groupKey,
+          name: groupKey,
           minPrice: item.rate,
           totalStock: 0,
           available: 0,
@@ -98,26 +98,38 @@ function App() {
         };
       }
 
-      const group = groups[skuPrefix];
+      const group = groups[groupKey];
       group.zones.push(item);
+
       group.totalStock += item.stock_on_hand;
       group.available += item.available_stock;
       group.actual += item.actual_available_stock;
-      if (item.rate < group.minPrice) group.minPrice = item.rate;
+
+      if (item.rate < group.minPrice) {
+        group.minPrice = item.rate;
+      }
     });
 
     return Object.values(groups);
   }, [rawItems]);
 
-  // --- FORMAT TIỀN TỆ ---
-  const formatCurrency = (amount: number) => {
+  // --- HÀM FORMAT TIỀN TỆ ---
+  // Format số tiền đã được nhân tỷ giá
+  const formatVND = (amount: number) => {
+    // Làm tròn số tiền (Math.round)
+    const roundedAmount = Math.round(amount);
     return new Intl.NumberFormat("vi-VN", {
       style: "currency",
       currency: "VND",
-    }).format(amount);
+    }).format(roundedAmount);
+  };
+  
+  // Hàm tính giá VND từ giá gốc (USD)
+  const getVndPrice = (usdRate: number) => {
+      return usdRate * EXCHANGE_RATE;
   };
 
-  // --- 4. BOOKING STATE ---
+  // --- BOOKING STATE ---
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<GroupedEvent | null>(null);
   const [selectedZoneId, setSelectedZoneId] = useState<string>("");
@@ -134,12 +146,18 @@ function App() {
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Mở Modal
   const openBookingModal = (event: GroupedEvent) => {
     setSelectedEvent(event);
-    if (event.zones.length > 0) {
+    
+    // Tự động chọn loại vé CÒN HÀNG đầu tiên
+    const availableZone = event.zones.find(z => z.stock_on_hand > 0);
+    
+    if (availableZone) {
+      setSelectedZoneId(availableZone.item_id);
+    } else if (event.zones.length > 0) {
       setSelectedZoneId(event.zones[0].item_id);
     }
+
     setBooking({
       customerName: "",
       phone: "",
@@ -159,7 +177,6 @@ function App() {
     setBooking((b) => ({ ...b, [field]: value }));
   };
 
-  // Lấy thông tin Zone đang chọn
   const currentZone = useMemo(() => {
     if (!selectedEvent) return null;
     return (
@@ -168,74 +185,75 @@ function App() {
     );
   }, [selectedEvent, selectedZoneId]);
 
-  // --- 5. HÀM SUBMIT (Xử lý cả Tiền mặt & PayPal) ---
-  const handleSubmit = async (eOrDetails: React.FormEvent | any) => {
-    // 1. Nếu là Submit Form (Tiền mặt) -> Chặn reload
-    if (eOrDetails && eOrDetails.preventDefault) {
-      eOrDetails.preventDefault();
-    }
-
-    // 2. Lấy thông tin PayPal (nếu có)
-    const paypalDetails = eOrDetails && !eOrDetails.preventDefault ? eOrDetails : null;
-
+  // --- HÀM SUBMIT ---
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!currentZone) return;
-
-    // 3. Chuẩn bị dữ liệu gửi n8n
+    
     const payload = {
       customerName: booking.customerName,
       email: booking.email,
       phone: booking.phone,
       quantity: booking.quantity,
-      ticket_price: currentZone.rate,
-      total: currentZone.rate * booking.quantity,
+      ticket_price: currentZone.rate, // Gửi giá gốc (USD)
+      total: currentZone.rate * booking.quantity, // Tổng gốc (USD)
       payment_method: booking.paymentMethod,
       item_name: currentZone.name,
       item_id: currentZone.item_id,
-      // Gửi thêm Transaction ID nếu thanh toán qua PayPal
-      paypal_transaction_id: paypalDetails ? paypalDetails.id : null
+      // Gửi thêm thông tin quy đổi nếu cần thiết cho email/invoice
+      display_price_vnd: getVndPrice(currentZone.rate),
     };
+
+    let targetApiUrl = "";
+    if (booking.paymentMethod === 'paypal') {
+        targetApiUrl = API_BOOKING_PAYPAL; 
+    } else {
+        targetApiUrl = API_BOOKING_CASH;   
+    }
 
     setIsSubmitting(true);
     setSubmitError(null);
 
     try {
-      const res = await fetch(API_BOOKING, {
+      const res = await fetch(targetApiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) throw new Error("Lỗi kết nối tới máy chủ n8n");
+      if (!res.ok) throw new Error("Lỗi kết nối tới hệ thống n8n");
 
       const data = await res.json();
       console.log("Success:", data);
+
+      if (booking.paymentMethod === 'paypal' && data.redirect_url) {
+          window.open(data.redirect_url, '_blank');
+          setSubmitSuccess("Cửa sổ thanh toán đã mở. Vui lòng hoàn tất thanh toán ở tab mới!");
+          closeModal();
+          setTimeout(() => {
+              // window.location.reload();
+            fetchData(); 
+          }, 3000);
+          return;
+      } 
       
       setSubmitSuccess(
-        `Vé "${currentZone.name}" đã được gửi tới email: ${booking.email}`
+        `Đặt vé thành công! Vui lòng kiểm tra email.`
       );
-
-      if (booking.paymentMethod === 'paypal' && data.ticket_qr) {
-          // TRƯỜNG HỢP 1: PAYPAL -> Hiện Modal QR to đùng
-          setTicketQR(data.ticket_qr);
-          setShowSuccessModal(true); 
-      } else {
-          // TRƯỜNG HỢP 2: TIỀN MẶT -> Chỉ hiện thông báo xanh góc trên phải
-          setSubmitSuccess(
-            `Đặt vé thành công! Mã đơn: ${data.invoice_number || 'Mới'}. Vui lòng thanh toán tại quầy.`
-          );
-      }
-
+      
       closeModal();
-      fetchData(); // Reload lại số lượng vé
+      fetchData(); 
     } catch (err) {
       console.error(err);
       setSubmitError("Có lỗi xảy ra, vui lòng thử lại sau.");
+      closeModal();
     } finally {
-      setIsSubmitting(false);
+      if (booking.paymentMethod !== 'paypal') {
+          setIsSubmitting(false);
+      }
     }
   };
 
-  // Tự động ẩn thông báo thành công sau 5s
   useEffect(() => {
     if (!submitSuccess) return;
     const t = setTimeout(() => setSubmitSuccess(null), 5000);
@@ -246,20 +264,18 @@ function App() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-sky-50 to-cyan-50 font-sans text-slate-800">
       
-      {/* Thông báo Thành công */}
       {submitSuccess && (
         <div className="fixed top-6 right-6 z-50 w-[350px] animate-bounce-in">
           <div className="bg-green-50 border-l-4 border-green-500 text-green-800 px-6 py-4 rounded-lg shadow-xl flex items-start gap-3">
             <Check className="w-6 h-6 flex-shrink-0 text-green-600" />
             <div>
-              <div className="font-bold text-lg">Đặt vé thành công!</div>
+              <div className="font-bold text-lg">Thành công!</div>
               <div className="text-sm mt-1">{submitSuccess}</div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Thông báo Lỗi */}
       {submitError && (
         <div className="fixed top-6 right-6 z-50 w-[350px] animate-bounce-in">
           <div className="bg-red-50 border-l-4 border-red-500 text-red-800 px-6 py-4 rounded-lg shadow-xl flex items-start gap-3">
@@ -303,12 +319,11 @@ function App() {
           </div>
         )}
 
-        {/* DANH SÁCH SHOW */}
         <div className="grid gap-8">
           {events.map((event) => (
             <div key={event.code} className="bg-white rounded-2xl shadow-lg overflow-hidden border border-slate-100 hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-1">
               
-              {/* Event Header */}
+              {/* Event Header (Dòng màu xanh - Giữ nguyên tên Event) */}
               <div className="bg-gradient-to-r from-sky-500 to-blue-600 p-5 flex justify-between items-center">
                 <h3 className="text-white text-2xl font-bold uppercase">{event.name}</h3>
                 <div className="bg-white/20 p-1.5 rounded-full text-white">
@@ -317,11 +332,11 @@ function App() {
               </div>
 
               <div className="p-6">
-                {/* Stats Grid */}
+                {/* Stats Grid - HIỂN THỊ TIỀN VND */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
                   <div className="p-4 rounded-xl bg-blue-50 border border-blue-100">
                     <div className="text-xs font-bold text-slate-400 uppercase mb-1">Giá từ</div>
-                    <div className="text-xl font-bold text-blue-600">{formatCurrency(event.minPrice)}</div>
+                    <div className="text-xl font-bold text-blue-600">{formatVND(getVndPrice(event.minPrice))}</div>
                   </div>
                   <div className="p-4 rounded-xl bg-cyan-50 border border-cyan-100">
                     <div className="text-xs font-bold text-slate-400 uppercase mb-1">Tổng vé</div>
@@ -337,18 +352,20 @@ function App() {
                   </div>
                 </div>
 
-                {/* Zone List */}
+                {/* Zone List - SỬA HIỂN THỊ SKU VÀ TIỀN VND */}
                 <div className="space-y-3 mb-8">
                   {event.zones.map((zone) => (
                     <div key={zone.item_id} className="flex flex-col md:flex-row md:items-center justify-between p-3 rounded-lg hover:bg-slate-50 transition-colors border-b border-slate-50 last:border-0">
                       <div className="flex-1">
                         <div className="flex items-baseline gap-2">
-                          <span className="font-bold text-slate-800 text-lg">{zone.name}</span>
+                          {/* Thay Name bằng SKU */}
+                          <span className="font-bold text-slate-800 text-lg">{zone.sku}</span>
                           <span className="text-slate-400 text-sm">—</span>
-                          <span className="font-bold text-blue-600">{formatCurrency(zone.rate)}</span>
+                          {/* Hiển thị tiền sau khi nhân 26000 */}
+                          <span className="font-bold text-blue-600">{formatVND(getVndPrice(zone.rate))}</span>
                         </div>
                         <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
-                          <span className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {zone.cf_date_and_time || "Chưa cập nhật ngày"}</span>
+                          <span className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {zone.cf_time_unformatted || "Chưa cập nhật ngày"}</span>
                           <span className="text-slate-300">|</span>
                           <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {zone.cf_location || "Chưa cập nhật địa điểm"}</span>
                         </div>
@@ -396,11 +413,15 @@ function App() {
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6">
                 <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">SỰ KIỆN</div>
                 <h4 className="text-xl font-bold text-slate-800 mb-1">{selectedEvent.name}</h4>
-                <div className="text-blue-600 font-bold text-lg">{formatCurrency(currentZone.rate)} <span className="text-sm text-slate-500 font-normal">/ vé</span></div>
+                <div className="text-blue-600 font-bold text-lg">
+                    {/* Giá hiển thị VND */}
+                    {formatVND(getVndPrice(currentZone.rate))} 
+                    <span className="text-sm text-slate-500 font-normal"> / vé</span>
+                </div>
               </div>
 
               {/* Form */}
-              <form className="space-y-5" onSubmit={(e) => e.preventDefault()}> {/* Prevent default submit here, handle in buttons */}
+              <form className="space-y-5" onSubmit={handleSubmit}>
                 
                 {/* Zone Selection */}
                 <div>
@@ -411,11 +432,20 @@ function App() {
                       value={selectedZoneId}
                       onChange={(e) => setSelectedZoneId(e.target.value)}
                     >
-                      {selectedEvent.zones.map((zone) => (
-                        <option key={zone.item_id} value={zone.item_id}>
-                          {zone.name} - {formatCurrency(zone.rate)}
-                        </option>
-                      ))}
+                      {selectedEvent.zones.map((zone) => {
+                        const isOutOfStock = zone.stock_on_hand <= 0;
+                        return (
+                          <option 
+                            key={zone.item_id} 
+                            value={zone.item_id}
+                            disabled={isOutOfStock}
+                            className={isOutOfStock ? "text-gray-400 bg-gray-100" : ""}
+                          >
+                            {/* Sửa hiển thị trong dropdown: SKU - Giá VND */}
+                            {zone.sku} - {formatVND(getVndPrice(zone.rate))} {isOutOfStock ? '(Hết vé)' : ''}
+                          </option>
+                        );
+                      })}
                     </select>
                     <Ticket className="absolute right-4 top-3.5 w-5 h-5 text-slate-400 pointer-events-none" />
                   </div>
@@ -462,91 +492,44 @@ function App() {
                       className="w-full p-3 bg-white border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-50 outline-none transition-all"
                     >
                       <option value="cash">Tiền mặt</option>
-                      <option value="paypal">PayPal / Thẻ</option>
+                      <option value="paypal">PayPal (Thanh toán ngay)</option>
                     </select>
                   </div>
                 </div>
 
-                {/* Total */}
+                {/* Total - HIỂN THỊ TỔNG TIỀN VND */}
                 <div className="bg-green-50 p-4 rounded-xl border-2 border-green-200 flex justify-between items-center">
                   <span className="font-bold text-slate-700">Tổng cộng:</span>
-                  <span className="text-2xl font-extrabold text-green-600">{formatCurrency(currentZone.rate * booking.quantity)}</span>
+                  <span className="text-2xl font-extrabold text-green-600">
+                    {formatVND(getVndPrice(currentZone.rate) * booking.quantity)}
+                  </span>
                 </div>
 
                 {/* Buttons Area */}
-                <div className="pt-2">
-                  {/* LOGIC HIỂN THỊ NÚT THANH TOÁN */}
-                  {booking.paymentMethod === "paypal" ? (
-                    <div className="animate-fade-in">
-                      <PayPalPayment
-                        amount={currentZone.rate * booking.quantity}
-                        onSuccess={(details) => handleSubmit(details)}
-                        onError={(err) => alert("Lỗi thanh toán: " + err)}
-                      />
-                    </div>
-                  ) : (
-                    <div className="flex gap-3">
-                      <button type="button" onClick={closeModal} className="flex-1 py-3.5 border-2 border-slate-300 rounded-xl font-bold text-slate-600 hover:bg-slate-100 transition-colors">
-                        Hủy bỏ
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleSubmit} // Gọi hàm submit khi bấm nút
-                        disabled={isSubmitting}
-                        className="flex-1 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-0.5 disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                      >
-                        {isSubmitting ? (
-                          <>
-                            <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></div>
-                            <span>Đang xử lý...</span>
-                          </>
-                        ) : (
-                          <span>Xác nhận đặt vé</span>
-                        )}
-                      </button>
-                    </div>
-                  )}
+                <div className="flex gap-3 pt-2">
+                  <button type="button" onClick={closeModal} className="flex-1 py-3.5 border-2 border-slate-300 rounded-xl font-bold text-slate-600 hover:bg-slate-100 transition-colors">
+                    Hủy bỏ
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting || (currentZone && currentZone.stock_on_hand <= 0)}
+                    className="flex-1 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-0.5 disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></div>
+                        <span>Đang xử lí...</span>
+                      </>
+                    ) : (
+                      <span>
+                        {booking.paymentMethod === 'paypal' ? 'Thanh toán ngay ➔' : 'Xác nhận đặt vé'}
+                      </span>
+                    )}
+                  </button>
                 </div>
 
               </form>
             </div>
-          </div>
-        </div>
-      )}
-
-      {showSuccessModal && ticketQR && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-fade-in">
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm"></div>
-          
-          <div className="bg-white rounded-3xl p-8 text-center max-w-md w-full z-10 shadow-2xl transform transition-all scale-100 relative">
-            {/* Icon Check to đùng */}
-            <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6 animate-bounce-in">
-              <Check className="w-12 h-12 text-green-600" />
-            </div>
-
-            <h3 className="text-3xl font-bold text-slate-800 mb-2">Thanh Toán Thành Công!</h3>
-            <p className="text-slate-600 mb-6">
-              Cảm ơn bạn <b>{booking.customerName}</b>. Dưới đây là vé vào cổng của bạn:
-            </p>
-            
-            {/* Khu vực hiển thị QR Code */}
-            <div className="bg-slate-50 border-2 border-dashed border-slate-300 p-6 rounded-2xl inline-block mb-6">
-              <img src={ticketQR} alt="QR Code Vé" className="w-48 h-48 mix-blend-multiply mx-auto" />
-              <p className="text-xs text-slate-400 mt-3 font-mono font-bold tracking-widest uppercase">
-                Quét mã này tại quầy soát vé
-              </p>
-            </div>
-
-            {/* Nút Hoàn tất */}
-            <button 
-              onClick={() => {
-                setShowSuccessModal(false);
-                setTicketQR(null);
-              }} 
-              className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-lg shadow-lg hover:shadow-xl transition-all"
-            >
-              Hoàn Tất & Đóng
-            </button>
           </div>
         </div>
       )}
