@@ -48,7 +48,7 @@ function App() {
   // --- STATE ---
   const [rawItems, setRawItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [_error, setError] = useState<string | null>(null);
 
   // --- CẤU HÌNH API ---
   const API_GET_URL = "https://n8n-group5.len-handmade.top/webhook/1cb7e2e7-bdb0-406e-82b6-799ffbd85625";
