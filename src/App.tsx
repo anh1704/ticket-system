@@ -1,76 +1,104 @@
-import { useEffect, useState, useMemo } from "react";
-import PayPalPayment from "./components/PayPalButton"; 
-import {
-  Package,
-  ShoppingCart,
-  X,
-  Check,
-  AlertCircle,
-  Calendar,
-  MapPin,
-  Ticket,
-} from "lucide-react";
+import { useEffect, useState, useMemo } from 'react';
+import { Package, Ticket, Calendar, MapPin, Loader2, AlertCircle, CheckCircle, X, Utensils, CreditCard } from 'lucide-react'; 
+import { Toaster, toast } from 'sonner';
 
-// --- 1. ĐỊNH NGHĨA INTERFACE (Cấu trúc dữ liệu) ---
-interface Item {
+// --- 1. Interfaces ---
+interface TicketItem {
   item_id: string;
   name: string;
   item_name: string;
-  unit: string;
-  status: string;
-  description: string;
+  sku: string;
   rate: number;
   stock_on_hand: number;
   available_stock: number;
   actual_available_stock: number;
-  sku: string;
-  item_type: string;
-  product_type: string;
-  created_time: string;
-  last_modified_time: string;
-  cf_date_and_time?: string;
+  unit: string;
+  status: string;
+  description: string;
+  
+  // Danh sách combo đi kèm (từ n8n)
+  related_combos?: TicketItem[]; 
+
+  cf_time?: string;
+  cf_time_unformatted?: string;
   cf_location?: string;
+  cf_location_unformatted?: string;
 }
 
-// Interface cho Sự kiện (Show) sau khi đã gom nhóm
 interface GroupedEvent {
-  code: string;       // Mã Show (ví dụ: HAT2025)
-  name: string;       // Tên Show
-  minPrice: number;   // Giá thấp nhất
-  totalStock: number; // Tổng vé
-  available: number;  // Có sẵn
-  actual: number;     // Thực tế
-  zones: Item[];      // Danh sách các hạng vé con
+  name: string;
+  description: string;
+  cf_time?: string;
+  cf_location?: string;
+  tickets: TicketItem[];
+}
+
+interface BookingSuccessInfo {
+  customerName: string;
+  eventName: string;
+  ticketType: string;
+  comboDetails?: string;
+  quantity: number;
+  totalPrice: number;
+  paymentMethod: string;
 }
 
 function App() {
-  // --- STATE ---
-  const [rawItems, setRawItems] = useState<Item[]>([]);
+  const [tickets, setTickets] = useState<TicketItem[]>([]); 
   const [loading, setLoading] = useState(false);
-  const [_error, setError] = useState<string | null>(null);
-  const [ticketQR, setTicketQR] = useState<string | null>(null);
-  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // API Lấy danh sách (GET)
-  const API_URL = "https://n8n-group5.len-handmade.top/webhook/5ce3f9d5-87e4-4555-a5ad-127136953a14";
-  // API Đặt vé (POST)
-  const API_BOOKING = "https://n8n-group5.len-handmade.top/webhook/abdd44ea-1757-43f2-9007-019c047e79af";
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedEvent, setSelectedEvent] = useState<GroupedEvent | null>(null);
+  const [selectedTicketId, setSelectedTicketId] = useState<string>(""); 
+  const [selectedComboIds, setSelectedComboIds] = useState<string[]>([]);
+  const [successModalOpen, setSuccessModalOpen] = useState(false);
+  const [successInfo, setSuccessInfo] = useState<BookingSuccessInfo | null>(null);
+  
+  // State để disable nút khi đang submit
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // --- 2. FETCH DATA ---
+  const [booking, setBooking] = useState({
+    customerName: '',
+    phone: '',
+    email: '',
+    quantity: 1,
+    paymentMethod: 'cash',
+  });
+
+  // URL lấy dữ liệu ban đầu
+  const API_URL = "https://n8n-group5.len-handmade.top/webhook/1cb7e2e7-bdb0-406e-82b6-799ffbd85625";
+  
+  const PAYMENT_API_URL = "https://n8n-group5.len-handmade.top/webhook/abdd44ea-1757-43f2-9007-019c047e79af"; 
+
+  // --- Fetch Data ---
   const fetchData = async () => {
     setLoading(true);
     setError(null);
-    setSubmitError(null); // Reset lỗi submit cũ nếu có
     try {
-      const response = await fetch(API_URL);
-      if (!response.ok) throw new Error(`Lỗi HTTP: ${response.status}`);
+      const res = await fetch(API_URL);
+      if (!res.ok) throw new Error(`Lỗi HTTP: ${res.status}`);
+      
+      const data: any = await res.json();
+      console.log("Dữ liệu API:", data); 
 
-      const data = await response.json();
-      const itemsArray = Array.isArray(data) ? data : data.items || [];
-      setRawItems(itemsArray);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Không thể tải dữ liệu";
-      setError(msg);
+      let processedData: TicketItem[] = [];
+
+      if (data.processedTickets && Array.isArray(data.processedTickets)) {
+        processedData = data.processedTickets;
+      } else if (Array.isArray(data)) {
+        processedData = data;
+      } else if (data.items && Array.isArray(data.items)) {
+        processedData = data.items;
+      } else if (data.item_id) {
+        processedData = [data];
+      }
+
+      setTickets(processedData);
+
+    } catch (err: any) {
+      console.error("Lỗi fetch:", err);
+      setError(err.message || "Không thể tải dữ liệu");
     } finally {
       setLoading(false);
     }
@@ -80,476 +108,567 @@ function App() {
     fetchData();
   }, []);
 
-  const events = useMemo(() => {
-    const groups: Record<string, GroupedEvent> = {};
+  // --- Grouping Logic ---
+  const groupedEvents = useMemo(() => {
+    const groups: { [key: string]: GroupedEvent } = {};
 
-    rawItems.forEach((item) => {
-      const skuPrefix = item.sku ? item.sku.split("-")[0] : `UNKNOWN_${item.item_id}`;
+    tickets.forEach((ticket) => {
+      if (ticket.unit !== 'Ticket') return;
+      if (ticket.status !== 'active') return;
 
-      if (!groups[skuPrefix]) {
-        groups[skuPrefix] = {
-          code: skuPrefix,
-          name: item.name.split("-")[0].trim(), 
-          minPrice: item.rate,
-          totalStock: 0,
-          available: 0,
-          actual: 0,
-          zones: [],
+      const eventName = ticket.name;
+      if (!groups[eventName]) {
+        groups[eventName] = {
+          name: eventName,
+          description: ticket.description,
+          cf_time: ticket.cf_time || ticket.cf_time_unformatted, 
+          cf_location: ticket.cf_location || ticket.cf_location_unformatted,
+          tickets: []
         };
       }
-
-      const group = groups[skuPrefix];
-      group.zones.push(item);
-      group.totalStock += item.stock_on_hand;
-      group.available += item.available_stock;
-      group.actual += item.actual_available_stock;
-      if (item.rate < group.minPrice) group.minPrice = item.rate;
+      groups[eventName].tickets.push(ticket);
     });
 
     return Object.values(groups);
-  }, [rawItems]);
+  }, [tickets]);
 
-  // --- FORMAT TIỀN TỆ ---
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat("vi-VN", {
-      style: "currency",
-      currency: "VND",
+    if (isNaN(amount) || amount === null || amount === undefined) return '0 đ';
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 2,
     }).format(amount);
   };
 
-  // --- 4. BOOKING STATE ---
-  const [modalOpen, setModalOpen] = useState(false);
-  const [selectedEvent, setSelectedEvent] = useState<GroupedEvent | null>(null);
-  const [selectedZoneId, setSelectedZoneId] = useState<string>("");
+  const getCurrentTicketInfo = () => {
+    if(!selectedEvent || !selectedTicketId) return null;
+    return selectedEvent.tickets.find(tk => tk.item_id === selectedTicketId);
+  };
 
-  const [booking, setBooking] = useState({
-    customerName: "",
-    phone: "",
-    email: "",
-    quantity: 1,
-    paymentMethod: "cash",
-  });
+  const getComboItemsForTicket = (ticket: TicketItem | null | undefined) => {
+    if (!ticket || !Array.isArray(ticket.related_combos)) return [];
+    return ticket.related_combos;
+  };
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  useEffect(() => {
+    setSelectedComboIds([]); 
+  }, [selectedTicketId]);
 
-  // Mở Modal
-  const openBookingModal = (event: GroupedEvent) => {
-    setSelectedEvent(event);
-    if (event.zones.length > 0) {
-      setSelectedZoneId(event.zones[0].item_id);
-    }
-    setBooking({
-      customerName: "",
-      phone: "",
-      email: "",
-      quantity: 1,
-      paymentMethod: "cash",
+  const toggleComboItem = (itemId: string) => {
+    setSelectedComboIds(prev => {
+      if (prev.includes(itemId)) {
+        return prev.filter(id => id !== itemId); 
+      } else {
+        return [...prev, itemId];
+      }
     });
+  };
+
+  // --- Booking Functions ---
+  const openBooking = (event: GroupedEvent) => {
+    setSelectedEvent(event);
+    if (event.tickets.length > 0) {
+      setSelectedTicketId(event.tickets[0].item_id);
+    }
+    setBooking({ customerName: '', phone: '', email: '', quantity: 1, paymentMethod: 'cash' });
+    setSelectedComboIds([]); 
     setModalOpen(true);
   };
 
   const closeModal = () => {
     setModalOpen(false);
     setSelectedEvent(null);
+    setSelectedTicketId("");
+  };
+
+  const closeSuccessModal = () => {
+    setSuccessModalOpen(false);
+    setSuccessInfo(null);
   };
 
   const handleChange = (field: string, value: string | number) => {
     setBooking((b) => ({ ...b, [field]: value }));
   };
 
-  // Lấy thông tin Zone đang chọn
-  const currentZone = useMemo(() => {
-    if (!selectedEvent) return null;
-    return (
-      selectedEvent.zones.find((z) => z.item_id === selectedZoneId) ||
-      selectedEvent.zones[0]
+  // --- Handle Submit (LOGIC CHÍNH ĐÃ SỬA) ---
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const currentTicket = getCurrentTicketInfo();
+    if (!selectedEvent || !currentTicket) return;
+
+    // Tính toán dữ liệu
+    const availableComboItems = getComboItemsForTicket(currentTicket);
+    const selectedCombos = availableComboItems.filter(item => 
+      selectedComboIds.includes(item.item_id)
     );
-  }, [selectedEvent, selectedZoneId]);
+    const comboPriceTotal = selectedCombos.reduce((sum, item) => sum + item.rate, 0);
+    const comboSkuString = selectedCombos.length > 0 
+      ? ` + [Add-on: ${selectedCombos.map(i => i.name).join(', ')}]` 
+      : '';
+    const unitPrice = currentTicket.rate + comboPriceTotal;
+    const totalAmount = unitPrice * booking.quantity;
 
-  // --- 5. HÀM SUBMIT (Xử lý cả Tiền mặt & PayPal) ---
-  const handleSubmit = async (eOrDetails: React.FormEvent | any) => {
-    // 1. Nếu là Submit Form (Tiền mặt) -> Chặn reload
-    if (eOrDetails && eOrDetails.preventDefault) {
-      eOrDetails.preventDefault();
-    }
-
-    // 2. Lấy thông tin PayPal (nếu có)
-    const paypalDetails = eOrDetails && !eOrDetails.preventDefault ? eOrDetails : null;
-
-    if (!currentZone) return;
-
-    // 3. Chuẩn bị dữ liệu gửi n8n
+    // Payload gửi đi
     const payload = {
       customerName: booking.customerName,
       email: booking.email,
       phone: booking.phone,
       quantity: booking.quantity,
-      ticket_price: currentZone.rate,
-      total: currentZone.rate * booking.quantity,
+      item_id: currentTicket.item_id,
+      item_name: selectedEvent.name,
+      sku: `${currentTicket.sku}${comboSkuString}`, 
+      ticket_price: unitPrice,
+      total: totalAmount,
       payment_method: booking.paymentMethod,
-      item_name: currentZone.name,
-      item_id: currentZone.item_id,
-      // Gửi thêm Transaction ID nếu thanh toán qua PayPal
-      paypal_transaction_id: paypalDetails ? paypalDetails.id : null
+      // Thêm thông tin rõ ràng cho n8n xử lý payment
+      combo_items: selectedComboIds, 
+      currency: 'USD' 
     };
 
-    setIsSubmitting(true);
-    setSubmitError(null);
+    setIsSubmitting(true); // Bắt đầu loading
 
     try {
-      const res = await fetch(API_BOOKING, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      // --- TRƯỜNG HỢP 1: PAYPAL ---
+      if (booking.paymentMethod === 'paypal') {
+        const toastId = toast.loading("Đang kết nối cổng thanh toán PayPal...");
+        
+        // Gọi Webhook n8n xử lý Payment
+        const res = await fetch(PAYMENT_API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
 
-      if (!res.ok) throw new Error("Lỗi kết nối tới máy chủ n8n");
-
-      const data = await res.json();
-      console.log("Success:", data);
+        const data = await res.json();
+        console.log("Phản hồi từ Payment Webhook:", data.redirect_url);
+        if (data && (data.redirect_url)) {
+             toast.dismiss(toastId);
+             toast.success("Đang chuyển hướng...", { duration: 2000 });
+             
+             // Delay nhẹ để user đọc thông báo
+            setTimeout(() => {
+                // Sử dụng window.open với tham số '_blank' để mở tab mới
+                const newWindow = window.open(data.redirect_url, '_blank');
+                
+                // Kiểm tra nếu trình duyệt chặn popup thì focus vào cửa sổ mới
+                if (newWindow) {
+                    newWindow.focus();
+                }
+            }, 1000);
+        } else {
+             // Fallback nếu n8n không trả về link (hoặc chỉ lưu đơn)
+             toast.dismiss(toastId);
+             toast.info("Đã gửi yêu cầu thanh toán. Vui lòng kiểm tra Email.");
+             closeModal();
+        }
+      } 
       
-      setSubmitSuccess(
-        `Vé "${currentZone.name}" đã được gửi tới email: ${booking.email}`
-      );
+      // --- TRƯỜNG HỢP 2: TIỀN MẶT / KHÁC ---
+      else {
+        const toastId = toast.loading("Đang xử lý đơn hàng...");
+        
+        const res = await fetch(API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
 
-      if (booking.paymentMethod === 'paypal' && data.ticket_qr) {
-          // TRƯỜNG HỢP 1: PAYPAL -> Hiện Modal QR to đùng
-          setTicketQR(data.ticket_qr);
-          setShowSuccessModal(true); 
-      } else {
-          // TRƯỜNG HỢP 2: TIỀN MẶT -> Chỉ hiện thông báo xanh góc trên phải
-          setSubmitSuccess(
-            `Đặt vé thành công! Mã đơn: ${data.invoice_number || 'Mới'}. Vui lòng thanh toán tại quầy.`
-          );
+        if (!res.ok) throw new Error("Lỗi gửi đơn hàng");
+        
+        await fetchData(); // Refresh lại tồn kho
+
+        closeModal();
+        toast.dismiss(toastId);
+        toast.success("Đặt vé thành công!", { duration: 3000 });
+
+        setSuccessInfo({
+          customerName: booking.customerName,
+          eventName: selectedEvent.name,
+          ticketType: currentTicket.sku,
+          comboDetails: selectedCombos.map(i => i.name).join(', '), 
+          quantity: booking.quantity,
+          totalPrice: payload.total,
+          paymentMethod: booking.paymentMethod
+        });
+        setSuccessModalOpen(true);
       }
 
-      closeModal();
-      fetchData(); // Reload lại số lượng vé
     } catch (err) {
       console.error(err);
-      setSubmitError("Có lỗi xảy ra, vui lòng thử lại sau.");
+      toast.error("Có lỗi xảy ra. Vui lòng thử lại sau.");
     } finally {
-      setIsSubmitting(false);
+      setIsSubmitting(false); // Kết thúc loading
     }
   };
 
-  // Tự động ẩn thông báo thành công sau 5s
-  useEffect(() => {
-    if (!submitSuccess) return;
-    const t = setTimeout(() => setSubmitSuccess(null), 5000);
-    return () => clearTimeout(t);
-  }, [submitSuccess]);
+  // --- Render ---
+  const currentTicket = getCurrentTicketInfo();
+  const availableComboItems = getComboItemsForTicket(currentTicket);
+  
+  const currentComboPrice = availableComboItems
+    .filter(item => selectedComboIds.includes(item.item_id))
+    .reduce((sum, item) => sum + item.rate, 0);
 
-  // --- RENDER UI ---
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-sky-50 to-cyan-50 font-sans text-slate-800">
-      
-      {/* Thông báo Thành công */}
-      {submitSuccess && (
-        <div className="fixed top-6 right-6 z-50 w-[350px] animate-bounce-in">
-          <div className="bg-green-50 border-l-4 border-green-500 text-green-800 px-6 py-4 rounded-lg shadow-xl flex items-start gap-3">
-            <Check className="w-6 h-6 flex-shrink-0 text-green-600" />
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
+      <Toaster position="top-right" richColors />
+
+      <div className="container mx-auto px-4 py-12 max-w-6xl">
+        <div className="mb-12 text-center space-y-4">
+          <div className="inline-flex items-center justify-center p-3 bg-blue-100 rounded-full mb-2">
+            <Package className="w-8 h-8 text-blue-600" />
+          </div>
+          <h1 className="text-4xl md:text-5xl font-extrabold text-slate-900 tracking-tight">
+            Sự Kiện & Vé
+          </h1>
+          <p className="text-lg text-slate-600 max-w-2xl mx-auto">
+            Khám phá và đặt vé cho những sự kiện âm nhạc, giải trí hot nhất.
+          </p>
+        </div>
+
+        {error && (
+          <div className="max-w-2xl mx-auto bg-red-50 border border-red-200 text-red-700 px-6 py-4 rounded-xl mb-8 flex items-center gap-3">
+            <AlertCircle className="w-6 h-6 shrink-0" />
             <div>
-              <div className="font-bold text-lg">Đặt vé thành công!</div>
-              <div className="text-sm mt-1">{submitSuccess}</div>
+              <strong className="block font-semibold">Đã xảy ra lỗi tải dữ liệu</strong>
+              <span className="text-sm opacity-90">{error}</span>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Thông báo Lỗi */}
-      {submitError && (
-        <div className="fixed top-6 right-6 z-50 w-[350px] animate-bounce-in">
-          <div className="bg-red-50 border-l-4 border-red-500 text-red-800 px-6 py-4 rounded-lg shadow-xl flex items-start gap-3">
-            <AlertCircle className="w-6 h-6 flex-shrink-0 text-red-600" />
-            <div>
-              <div className="font-bold text-lg">Lỗi hệ thống</div>
-              <div className="text-sm mt-1">{submitError}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Header Banner */}
-      <div className="container mx-auto px-4 py-8 max-w-7xl">
-        <div className="bg-gradient-to-r from-blue-600 to-cyan-500 rounded-2xl p-8 text-white flex items-center gap-6 shadow-2xl">
-          <div className="bg-white/20 p-4 rounded-2xl backdrop-blur-md shadow-inner">
-            <Package className="w-12 h-12" />
-          </div>
-          <div>
-            <h1 className="text-4xl font-extrabold tracking-tight">Hệ Thống Vé Sự Kiện</h1>
-            <p className="text-blue-100 mt-2 text-lg">Đặt vé trực tuyến nhanh chóng - Thanh toán an toàn</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="container mx-auto px-4 max-w-6xl pb-20">
-        <div className="flex items-center justify-between mb-8">
-          <h2 className="text-3xl font-bold text-slate-700 border-l-4 border-blue-500 pl-4">
-            Sự Kiện Nổi Bật
-          </h2>
-          <div className="bg-white px-5 py-2 rounded-full shadow-md border border-slate-100 text-sm font-medium text-slate-600">
-            Tổng số: <span className="font-bold text-blue-600 text-lg">{events.length}</span> shows
-          </div>
-        </div>
-
-        {loading && (
-          <div className="text-center py-20">
-            <div className="animate-spin inline-block w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full"></div>
-            <p className="mt-4 text-slate-500 font-medium">Đang tải dữ liệu mới nhất...</p>
           </div>
         )}
 
-        {/* DANH SÁCH SHOW */}
-        <div className="grid gap-8">
-          {events.map((event) => (
-            <div key={event.code} className="bg-white rounded-2xl shadow-lg overflow-hidden border border-slate-100 hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-1">
-              
-              {/* Event Header */}
-              <div className="bg-gradient-to-r from-sky-500 to-blue-600 p-5 flex justify-between items-center">
-                <h3 className="text-white text-2xl font-bold uppercase">{event.name}</h3>
-                <div className="bg-white/20 p-1.5 rounded-full text-white">
-                  <Check className="w-5 h-5" />
+        {loading && (
+          <div className="flex flex-col items-center justify-center py-20 text-slate-500">
+            <Loader2 className="w-10 h-10 animate-spin text-blue-600 mb-4" />
+            <p>Đang tải danh sách sự kiện...</p>
+          </div>
+        )}
+
+        {!loading && !error && groupedEvents.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            {groupedEvents.map((event) => (
+              <div key={event.name} className="flex flex-col bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 border border-slate-200 overflow-hidden group">
+                <div className="p-6 pb-4 bg-gradient-to-r from-slate-900 to-slate-800 text-white">
+                  <h3 className="text-2xl font-bold mb-3 leading-tight">{event.name}</h3>
+                  <div className="space-y-2 text-slate-300 text-sm">
+                    {event.cf_time && (
+                        <div className="flex items-start gap-2">
+                             <Calendar className="w-4 h-4 mt-0.5 text-blue-400 shrink-0"/> 
+                             <span>{event.cf_time}</span>
+                        </div>
+                    )}
+                    {event.cf_location && (
+                        <div className="flex items-start gap-2">
+                            <MapPin className="w-4 h-4 mt-0.5 text-red-400 shrink-0"/> 
+                            <span className="line-clamp-2">{event.cf_location}</span>
+                        </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="p-6 flex-1 flex flex-col bg-white">
+                   <div className="flex items-center gap-2 mb-4">
+                      <Ticket className="w-5 h-5 text-blue-600"/>
+                      <span className="font-semibold text-slate-700">Các hạng vé đang mở bán:</span>
+                   </div>
+                   
+                   <div className="space-y-3 mb-8 flex-1">
+                       {event.tickets.map(ticket => (
+                           <div key={ticket.item_id} className="flex justify-between items-center p-3 rounded-lg bg-slate-50 border border-slate-100 hover:border-blue-200 transition-colors">
+                               <div>
+                                   <div className="font-bold text-slate-800">{ticket.sku}</div>
+                                   <div className="text-xs font-medium text-slate-500 mt-0.5">
+                                      {ticket.available_stock > 0 
+                                        ? <span className="text-green-600">Còn {ticket.available_stock} vé</span>
+                                        : <span className="text-red-500">Hết vé</span>
+                                      }
+                                   </div>
+                               </div>
+                               <div className="text-blue-700 font-bold text-lg">
+                                   {formatCurrency(ticket.rate)}
+                               </div>
+                           </div>
+                       ))}
+                   </div>
+
+                   <button
+                    onClick={() => openBooking(event)}
+                    className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-200 transition-all transform active:scale-[0.98] flex items-center justify-center gap-2"
+                   >
+                       Đặt Vé Ngay
+                   </button>
                 </div>
               </div>
-
-              <div className="p-6">
-                {/* Stats Grid */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-                  <div className="p-4 rounded-xl bg-blue-50 border border-blue-100">
-                    <div className="text-xs font-bold text-slate-400 uppercase mb-1">Giá từ</div>
-                    <div className="text-xl font-bold text-blue-600">{formatCurrency(event.minPrice)}</div>
-                  </div>
-                  <div className="p-4 rounded-xl bg-cyan-50 border border-cyan-100">
-                    <div className="text-xs font-bold text-slate-400 uppercase mb-1">Tổng vé</div>
-                    <div className="text-xl font-bold text-cyan-600">{event.totalStock}</div>
-                  </div>
-                  <div className="p-4 rounded-xl bg-green-50 border border-green-100">
-                    <div className="text-xs font-bold text-slate-400 uppercase mb-1">Còn lại</div>
-                    <div className="text-xl font-bold text-green-600">{event.available}</div>
-                  </div>
-                  <div className="p-4 rounded-xl bg-amber-50 border border-amber-100">
-                    <div className="text-xs font-bold text-slate-400 uppercase mb-1">Thực tế</div>
-                    <div className="text-xl font-bold text-amber-600">{event.actual}</div>
-                  </div>
-                </div>
-
-                {/* Zone List */}
-                <div className="space-y-3 mb-8">
-                  {event.zones.map((zone) => (
-                    <div key={zone.item_id} className="flex flex-col md:flex-row md:items-center justify-between p-3 rounded-lg hover:bg-slate-50 transition-colors border-b border-slate-50 last:border-0">
-                      <div className="flex-1">
-                        <div className="flex items-baseline gap-2">
-                          <span className="font-bold text-slate-800 text-lg">{zone.name}</span>
-                          <span className="text-slate-400 text-sm">—</span>
-                          <span className="font-bold text-blue-600">{formatCurrency(zone.rate)}</span>
-                        </div>
-                        <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
-                          <span className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {zone.cf_date_and_time || "Chưa cập nhật ngày"}</span>
-                          <span className="text-slate-300">|</span>
-                          <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {zone.cf_location || "Chưa cập nhật địa điểm"}</span>
-                        </div>
-                      </div>
-                      <div className="mt-2 md:mt-0 text-right">
-                        <span className={`text-sm font-bold px-3 py-1 rounded-full ${zone.stock_on_hand > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                          {zone.stock_on_hand > 0 ? `Còn ${zone.stock_on_hand} vé` : 'Hết vé'}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <button 
-                  onClick={() => openBookingModal(event)}
-                  className="w-full py-4 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-700 hover:to-blue-600 text-white rounded-xl font-bold text-lg shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-0.5 flex items-center justify-center gap-2"
-                >
-                  <ShoppingCart className="w-6 h-6" /> Đặt Vé Ngay
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* --- MODAL ĐẶT VÉ --- */}
-      {modalOpen && selectedEvent && currentZone && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {modalOpen && selectedEvent && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={closeModal}></div>
-          
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl z-10 overflow-hidden animate-scale-in relative flex flex-col max-h-[90vh]">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg z-10 overflow-hidden flex flex-col max-h-[95vh] animate-in fade-in zoom-in-95 duration-200">
             
-            {/* Modal Header */}
-            <div className="bg-blue-600 p-5 flex justify-between items-center text-white flex-shrink-0">
-              <h3 className="text-xl font-bold flex items-center gap-2">
-                <Ticket className="w-6 h-6" /> Xác Nhận Đặt Vé
-              </h3>
-              <button onClick={closeModal} className="bg-white/20 hover:bg-white/30 rounded-full p-2 transition-colors">
-                <X className="w-5 h-5" />
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">Đặt vé sự kiện</h3>
+                <p className="text-xs text-slate-500 truncate max-w-[250px]">{selectedEvent.name}</p>
+              </div>
+              <button onClick={closeModal} className="p-2 bg-slate-200 hover:bg-slate-300 rounded-full text-slate-600 transition">
+                <X className="w-5 h-5"/>
               </button>
             </div>
 
-            <div className="overflow-y-auto p-6 custom-scrollbar">
-              {/* Event Summary */}
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6">
-                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">SỰ KIỆN</div>
-                <h4 className="text-xl font-bold text-slate-800 mb-1">{selectedEvent.name}</h4>
-                <div className="text-blue-600 font-bold text-lg">{formatCurrency(currentZone.rate)} <span className="text-sm text-slate-500 font-normal">/ vé</span></div>
-              </div>
-
-              {/* Form */}
-              <form className="space-y-5" onSubmit={(e) => e.preventDefault()}> {/* Prevent default submit here, handle in buttons */}
-                
-                {/* Zone Selection */}
+            <div className="p-6 overflow-y-auto">
+              <form onSubmit={handleSubmit} className="space-y-6">
                 <div>
                   <label className="block text-sm font-bold text-slate-700 mb-2">Chọn Loại Vé</label>
                   <div className="relative">
-                    <select
-                      className="w-full p-3 bg-white border-2 border-slate-200 rounded-xl font-medium text-slate-700 focus:border-blue-500 focus:ring-4 focus:ring-blue-50 outline-none appearance-none transition-all"
-                      value={selectedZoneId}
-                      onChange={(e) => setSelectedZoneId(e.target.value)}
+                    <select 
+                      className="w-full p-3 pl-4 pr-10 appearance-none border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white font-medium text-slate-700"
+                      value={selectedTicketId}
+                      onChange={(e) => setSelectedTicketId(e.target.value)}
                     >
-                      {selectedEvent.zones.map((zone) => (
-                        <option key={zone.item_id} value={zone.item_id}>
-                          {zone.name} - {formatCurrency(zone.rate)}
-                        </option>
+                      {selectedEvent.tickets.map(ticket => (
+                          <option key={ticket.item_id} value={ticket.item_id} disabled={ticket.available_stock <= 0}>
+                              {ticket.sku} - {formatCurrency(ticket.rate)} {ticket.available_stock <= 0 ? '(Hết vé)' : ''}
+                          </option>
                       ))}
                     </select>
-                    <Ticket className="absolute right-4 top-3.5 w-5 h-5 text-slate-400 pointer-events-none" />
+                    <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-slate-500">
+                       <Ticket className="w-4 h-4" />
+                    </div>
                   </div>
                 </div>
 
-                {/* Customer Inputs */}
-                <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">Họ và Tên *</label>
-                  <input required type="text" placeholder="Nguyễn Văn A"
-                    value={booking.customerName} onChange={(e) => handleChange("customerName", e.target.value)}
-                    className="w-full p-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-50 outline-none transition-all"
-                  />
+                {availableComboItems.length > 0 && (
+                   <div className="bg-orange-50 border border-orange-100 p-4 rounded-xl">
+                      <div className="flex items-center gap-2 mb-3 text-orange-800 font-bold text-sm">
+                        <Utensils className="w-4 h-4"/>
+                        Ưu đãi Combo (Tùy chọn):
+                      </div>
+                      <div className="space-y-2">
+                        {availableComboItems.map(item => {
+                          const isSelected = selectedComboIds.includes(item.item_id);
+                          return (
+                            <div 
+                              key={item.item_id} 
+                              onClick={() => toggleComboItem(item.item_id)}
+                              className={`flex justify-between items-center p-3 rounded-lg border cursor-pointer transition-all ${
+                                isSelected 
+                                  ? 'bg-orange-100 border-orange-300 shadow-sm' 
+                                  : 'bg-white border-slate-200 hover:border-orange-200'
+                              }`}
+                            >
+                               <div className="flex items-center gap-3">
+                                  <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${
+                                    isSelected ? 'bg-orange-500 border-orange-500' : 'bg-white border-slate-300'
+                                  }`}>
+                                    {isSelected && <CheckCircle className="w-3.5 h-3.5 text-white" />}
+                                  </div>
+                                  <span className={`text-sm ${isSelected ? 'font-semibold text-slate-800' : 'text-slate-600'}`}>
+                                    {item.name}
+                                  </span>
+                               </div>
+                               <span className="font-semibold text-orange-700 text-sm">+{formatCurrency(item.rate)}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                   </div>
+                )}
+
+                <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-3">
+                    <div className="flex justify-between items-center text-sm">
+                        <span className="text-slate-600">Giá vé gốc:</span>
+                        <span className="font-bold text-slate-800">
+                            {formatCurrency(currentTicket?.rate || 0)}
+                        </span>
+                    </div>
+                    {currentComboPrice > 0 && (
+                      <div className="flex justify-between items-center text-sm animate-in slide-in-from-top-2 duration-300">
+                          <span className="text-slate-600">Thêm Combo:</span>
+                          <span className="font-bold text-slate-800">
+                              +{formatCurrency(currentComboPrice)}
+                          </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center pt-2 border-t border-blue-200">
+                        <span className="text-slate-700 font-bold">Thành tiền tạm tính:</span>
+                        <span className="text-xl font-extrabold text-blue-700">
+                            {formatCurrency(((currentTicket?.rate || 0) + currentComboPrice) * booking.quantity)}
+                        </span>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <h4 className="text-sm font-semibold text-slate-900 border-b pb-2">Thông tin người nhận</h4>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-600 mb-1.5">Họ và tên</label>
+                      <input
+                          required
+                          value={booking.customerName}
+                          onChange={(e) => handleChange('customerName', e.target.value)}
+                          className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition"
+                          placeholder="Nhập họ tên đầy đủ"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600 mb-1.5">Số điện thoại</label>
+                            <input
+                                required
+                                type="tel"
+                                value={booking.phone}
+                                onChange={(e) => handleChange('phone', e.target.value)}
+                                className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition"
+                                placeholder="09xxxxxxxxx"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-600 mb-1.5">Email</label>
+                            <input
+                                required
+                                type="email"
+                                value={booking.email}
+                                onChange={(e) => handleChange('email', e.target.value)}
+                                className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition"
+                                placeholder="example@mail.com"
+                            />
+                        </div>
+                    </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-2">Số điện thoại *</label>
-                    <input required type="tel" placeholder="09xxxxxxxx"
-                      value={booking.phone} onChange={(e) => handleChange("phone", e.target.value)}
-                      className="w-full p-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-50 outline-none transition-all"
+                    <label className="block text-sm font-medium text-slate-600 mb-1.5">Số lượng vé</label>
+                    <input
+                      required
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={booking.quantity}
+                      onChange={(e) => handleChange('quantity', Number(e.target.value))}
+                      className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-2">Email *</label>
-                    <input required type="email" placeholder="email@example.com"
-                      value={booking.email} onChange={(e) => handleChange("email", e.target.value)}
-                      className="w-full p-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-50 outline-none transition-all"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-2">Số lượng *</label>
-                    <input required type="number" min={1} max={currentZone.available_stock || 99}
-                      value={booking.quantity} onChange={(e) => handleChange("quantity", Number(e.target.value))}
-                      className="w-full p-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-50 outline-none transition-all text-center font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-2">Thanh toán *</label>
+                    <label className="block text-sm font-medium text-slate-600 mb-1.5">Hình thức thanh toán</label>
                     <select
-                      value={booking.paymentMethod} onChange={(e) => handleChange("paymentMethod", e.target.value)}
-                      className="w-full p-3 bg-white border-2 border-slate-200 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-50 outline-none transition-all"
+                      value={booking.paymentMethod}
+                      onChange={(e) => handleChange('paymentMethod', e.target.value)}
+                      className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white transition"
                     >
                       <option value="cash">Tiền mặt</option>
-                      <option value="paypal">PayPal / Thẻ</option>
+                      <option value="paypal">PayPal</option>
                     </select>
                   </div>
                 </div>
 
-                {/* Total */}
-                <div className="bg-green-50 p-4 rounded-xl border-2 border-green-200 flex justify-between items-center">
-                  <span className="font-bold text-slate-700">Tổng cộng:</span>
-                  <span className="text-2xl font-extrabold text-green-600">{formatCurrency(currentZone.rate * booking.quantity)}</span>
-                </div>
-
-                {/* Buttons Area */}
-                <div className="pt-2">
-                  {/* LOGIC HIỂN THỊ NÚT THANH TOÁN */}
-                  {booking.paymentMethod === "paypal" ? (
-                    <div className="animate-fade-in">
-                      <PayPalPayment
-                        amount={currentZone.rate * booking.quantity}
-                        onSuccess={(details) => handleSubmit(details)}
-                        onError={(err) => alert("Lỗi thanh toán: " + err)}
-                      />
-                    </div>
-                  ) : (
-                    <div className="flex gap-3">
-                      <button type="button" onClick={closeModal} className="flex-1 py-3.5 border-2 border-slate-300 rounded-xl font-bold text-slate-600 hover:bg-slate-100 transition-colors">
-                        Hủy bỏ
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleSubmit} // Gọi hàm submit khi bấm nút
-                        disabled={isSubmitting}
-                        className="flex-1 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-0.5 disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                      >
-                        {isSubmitting ? (
-                          <>
-                            <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></div>
+                <div className="pt-4 flex gap-3">
+                  <button 
+                    type="button" 
+                    onClick={closeModal} 
+                    disabled={isSubmitting}
+                    className="flex-1 px-4 py-3 rounded-xl border border-slate-300 font-bold text-slate-600 hover:bg-slate-50 transition disabled:opacity-50"
+                  >
+                      Hủy bỏ
+                  </button>
+                  <button 
+                    type="submit" 
+                    disabled={isSubmitting}
+                    className={`flex-[2] px-4 py-3 text-white rounded-xl font-bold shadow-lg transition transform active:scale-[0.98] flex items-center justify-center gap-2 
+                      ${isSubmitting ? 'opacity-70 cursor-not-allowed' : 'hover:shadow-xl'}
+                      ${booking.paymentMethod === 'paypal' ? 'bg-[#003087] hover:bg-[#00256b]' : 'bg-blue-600 hover:bg-blue-700'}
+                    `}
+                  >
+                      {isSubmitting ? (
+                         <>
+                            <Loader2 className="w-5 h-5 animate-spin" />
                             <span>Đang xử lý...</span>
-                          </>
-                        ) : (
-                          <span>Xác nhận đặt vé</span>
-                        )}
-                      </button>
-                    </div>
-                  )}
+                         </>
+                      ) : (
+                         booking.paymentMethod === 'paypal' ? (
+                            <>
+                               <span>Thanh toán ngay</span>
+                               <CreditCard className="w-5 h-5 opacity-80" />
+                            </>
+                         ) : "Xác Nhận Đặt Vé"
+                      )}
+                  </button>
                 </div>
-
               </form>
             </div>
           </div>
         </div>
       )}
 
-      {showSuccessModal && ticketQR && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-fade-in">
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm"></div>
-          
-          <div className="bg-white rounded-3xl p-8 text-center max-w-md w-full z-10 shadow-2xl transform transition-all scale-100 relative">
-            {/* Icon Check to đùng */}
-            <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6 animate-bounce-in">
-              <Check className="w-12 h-12 text-green-600" />
-            </div>
+      {successModalOpen && successInfo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+           <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm transition-opacity" onClick={closeSuccessModal}></div>
+           
+           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md z-10 overflow-hidden relative animate-in fade-in zoom-in-95 duration-300">
+             
+             <div className="bg-green-600 h-32 flex items-center justify-center relative">
+                <div className="bg-white p-4 rounded-full shadow-lg mt-10">
+                   <CheckCircle className="w-12 h-12 text-green-600" />
+                </div>
+             </div>
 
-            <h3 className="text-3xl font-bold text-slate-800 mb-2">Thanh Toán Thành Công!</h3>
-            <p className="text-slate-600 mb-6">
-              Cảm ơn bạn <b>{booking.customerName}</b>. Dưới đây là vé vào cổng của bạn:
-            </p>
-            
-            {/* Khu vực hiển thị QR Code */}
-            <div className="bg-slate-50 border-2 border-dashed border-slate-300 p-6 rounded-2xl inline-block mb-6">
-              <img src={ticketQR} alt="QR Code Vé" className="w-48 h-48 mix-blend-multiply mx-auto" />
-              <p className="text-xs text-slate-400 mt-3 font-mono font-bold tracking-widest uppercase">
-                Quét mã này tại quầy soát vé
-              </p>
-            </div>
+             <div className="px-8 pt-12 pb-8 text-center">
+                <h2 className="text-2xl font-bold text-slate-800 mb-2">Đặt vé thành công!</h2>
+                <p className="text-slate-500 text-sm mb-6">Cảm ơn bạn đã đặt vé. Thông tin chi tiết đã được gửi đến email của bạn.</p>
+                
+                <div className="bg-slate-50 rounded-2xl p-5 text-left border border-slate-100 space-y-3 mb-6 relative overflow-hidden">
+                    <div className="absolute top-1/2 -left-2 w-4 h-4 bg-white rounded-full border border-slate-100"></div>
+                    <div className="absolute top-1/2 -right-2 w-4 h-4 bg-white rounded-full border border-slate-100"></div>
 
-            {/* Nút Hoàn tất */}
-            <button 
-              onClick={() => {
-                setShowSuccessModal(false);
-                setTicketQR(null);
-              }} 
-              className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-lg shadow-lg hover:shadow-xl transition-all"
-            >
-              Hoàn Tất & Đóng
-            </button>
-          </div>
+                    <div className="flex justify-between">
+                        <span className="text-slate-500 text-sm">Khách hàng</span>
+                        <span className="font-semibold text-slate-800 text-sm">{successInfo.customerName}</span>
+                    </div>
+                    <div className="border-b border-dashed border-slate-200 my-2"></div>
+                    <div>
+                        <span className="text-slate-500 text-xs block mb-1">Sự kiện</span>
+                        <span className="font-bold text-slate-800 block leading-tight">{successInfo.eventName}</span>
+                    </div>
+                    
+                    {successInfo.comboDetails && (
+                       <div className="mt-2 text-xs text-slate-500">
+                          <span className="font-semibold text-slate-700">Add-on: </span>
+                          {successInfo.comboDetails}
+                       </div>
+                    )}
+
+                    <div className="flex justify-between items-end mt-2">
+                        <div>
+                             <span className="text-slate-500 text-xs block">Loại vé</span>
+                             <span className="font-semibold text-blue-600">{successInfo.ticketType}</span>
+                        </div>
+                        <div className="text-right">
+                             <span className="text-slate-500 text-xs block">Số lượng</span>
+                             <span className="font-semibold text-slate-800">x{successInfo.quantity}</span>
+                        </div>
+                    </div>
+                    <div className="border-b border-dashed border-slate-200 my-2"></div>
+                    <div className="flex justify-between items-center">
+                        <span className="font-bold text-slate-700">Tổng thanh toán</span>
+                        <span className="font-extrabold text-xl text-red-600">{formatCurrency(successInfo.totalPrice)}</span>
+                    </div>
+                </div>
+
+                <button 
+                  onClick={closeSuccessModal}
+                  className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition shadow-lg"
+                >
+                    Đóng và tiếp tục
+                </button>
+             </div>
+           </div>
         </div>
       )}
+
     </div>
   );
 }
