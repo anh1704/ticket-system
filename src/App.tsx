@@ -43,6 +43,9 @@ interface BookingSuccessInfo {
   paymentMethod: string;
 }
 
+// --- TỶ GIÁ QUY ĐỔI (USD -> VND) ---
+const EXCHANGE_RATE = 26000; 
+
 function App() {
   const [tickets, setTickets] = useState<TicketItem[]>([]); 
   const [loading, setLoading] = useState(false);
