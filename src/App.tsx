@@ -247,15 +247,18 @@ function App() {
              toast.success("Đang chuyển hướng...", { duration: 2000 });
              
              // Delay nhẹ để user đọc thông báo
-            setTimeout(() => {
+            setTimeout(async () => {
                 // Sử dụng window.open với tham số '_blank' để mở tab mới
                 const newWindow = window.open(data.redirect_url, '_blank');
-                
+
                 // Kiểm tra nếu trình duyệt chặn popup thì focus vào cửa sổ mới
                 if (newWindow) {
                     newWindow.focus();
                 }
+                closeModal();
+                await fetchData(); // Refresh lại tồn kho
             }, 1000);
+
         } else {
              // Fallback nếu n8n không trả về link (hoặc chỉ lưu đơn)
              toast.dismiss(toastId);
